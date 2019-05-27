@@ -10,14 +10,17 @@
 #include <stdlib.h>
 
 #define TLB_SIZE 16
-#define PAGES 64
-#define PAGE_MASK 63
+#define PAGES 256
+#define PAGE_MASK 255
 
 #define PAGE_SIZE 256
 #define OFFSET_BITS 8
 #define OFFSET_MASK 255
 
 #define MEMORY_SIZE PAGES * PAGE_SIZE
+
+#define PAGE_FRAMES 64
+#define MEMORYSZ PAGE_FRAMES * PAGE_SIZE // FOR PHYSICAL MEMORY
 
 // Max number of characters per line of input file to read.
 #define BUFFER_SIZE 10
@@ -59,7 +62,6 @@ void enqueue(Queue *queue, Node *node, int mode) {
 
     if (alreadyInQueue) {
         if (queue->last == node) {
-            printf("Node %d is already the last element of queue\n", node->physicalPage);
             return;
         } else {
 
@@ -87,8 +89,6 @@ void enqueue(Queue *queue, Node *node, int mode) {
             node->prev = queue->last;
             queue->last = node;
             node->next = NULL;
-
-            printf("Node %d is already in the queue, placed to the end\n", node->physicalPage);
         }
 
     } else {
@@ -107,34 +107,31 @@ void enqueue(Queue *queue, Node *node, int mode) {
 
 void dequeue(Queue *queue) {
     if (queue->currentSize == 0) {
-        printf("Attempt to remove from empty queue fix this.\n");
         return;
     } else if (queue->currentSize == 1) {
-        printf("Dequeueing %d\n", queue->first->physicalPage);
         queue->first = NULL;
         queue->last = NULL;
         queue->currentSize = 0;
         return;
     }
 
-    printf("Dequeueing %d\n", queue->first->physicalPage);
     queue->first->next->prev = NULL;
     queue->first = queue->first->next;
     queue->currentSize--;
 }
 
-int getPhysicalPageByLogicalPage(Queue *queue, int logicalPage) {
+Node* getPhysicalPageByLogicalPage(Queue *queue, int logicalPage) {
     Node *currentNode = queue->first;
 
     while (currentNode) {
         if (currentNode->logicalPage == logicalPage) {
-            return currentNode->physicalPage;
+            return currentNode;
         }
 
         currentNode = currentNode->next;
     }
 
-    return -1;
+    return NULL;
 }
 
 struct tlbentry {
@@ -149,7 +146,7 @@ int tlbindex = 0;
 
 // pagetable[logical_page] is the physical page number for logical page. Value is -1 if that logical page isn't yet in the table.
 
-signed char main_memory[MEMORY_SIZE];
+signed char main_memory[MEMORYSZ];
 
 // Pointer to memory mapped backing file
 signed char *backing;
@@ -245,40 +242,37 @@ int main(int argc, const char *argv[]) {
         } else {
 
             // Page fault
-            physical_page = getPhysicalPageByLogicalPage(myQueue, logical_page);
+            Node *node = getPhysicalPageByLogicalPage(myQueue, logical_page);
+            if(node != NULL) {
+                physical_page = node->physicalPage;
+            } else {
+                physical_page = -1;
+            }
 
             if (physical_page == -1) {
                 page_faults++;
 
-                printf("MISSSSSSSSSSSSSSSSSSSSSSSSSS!\n");
-                Node *node = (Node *) malloc(sizeof(Node));
+                node = (Node *) malloc(sizeof(Node));
 
                 if (myQueue->currentSize == myQueue->maxSize) {
-                    printf("AHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHH\n\n\n\n\n\n");
-                    printf("Replacing old physical page %d, virtual page %d with new physical page %d, virtual page %d\n",
-                           myQueue->first->physicalPage, myQueue->first->logicalPage,
-                           myQueue->first->physicalPage, logical_page);
                     physical_page = myQueue->first->physicalPage;
                     dequeue(myQueue);
                     node->physicalPage = physical_page;
                     node->logicalPage = logical_page;
                 } else if (myQueue->currentSize < myQueue->maxSize) {
-                    printf("free_page=%d\n", free_page);
                     physical_page = free_page;
                     free_page++;
                     node->physicalPage = physical_page;
                     node->logicalPage = logical_page;
-                } else {
-                    printf("Something went horribly wrong!\n");
                 }
 
                 enqueue(myQueue, node, mode);
 
-
-
                 // Copy page from backing file into physical memory
                 memcpy(main_memory + physical_page * PAGE_SIZE, backing + logical_page * PAGE_SIZE, PAGE_SIZE);
 
+            } else {
+                enqueue(myQueue, node, mode);
             }
             add_to_tlb(logical_page, physical_page);
         }
